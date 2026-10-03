@@ -1,0 +1,10 @@
+# Private documents: inputs and outputs never go into the repository
+scans/
+formatted/
+*.pdf
+
+# Local tooling
+.claude/
+.vscode/
+Thumbs.db
+.DS_Store

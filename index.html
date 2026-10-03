@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Documents are processed in this tab only: no network requests are allowed. -->
+<meta http-equiv="Content-Security-Policy" content="connect-src 'none'; form-action 'none'; object-src 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#1f6feb">
+<title>EasyScan2PDF</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+<header>
+  <h1>EasyScan2PDF</h1>
+  <button id="openBtn" class="primary">Open…</button>
+  <input id="fileInput" type="file" accept="application/pdf,.pdf,image/jpeg,image/png" multiple hidden>
+  <span id="docName"></span>
+  <label class="inline">Pages per sheet
+    <select id="layoutSel">
+      <option value="auto">Auto</option>
+      <option value="1">1</option>
+      <option value="2">2 (left | right)</option>
+      <option value="2v">2 (top | bottom)</option>
+    </select>
+  </label>
+  <label class="inline">Reading order
+    <select id="order">
+      <option value="ltr">Left to right</option>
+      <option value="rtl">Right to left</option>
+    </select>
+  </label>
+  <span id="status"></span>
+  <button id="installBtn" hidden title="Install EasyScan2PDF as an app on this device">Install app</button>
+</header>
+
+<main>
+  <aside id="thumbs" aria-label="Sheets"></aside>
+
+  <section id="center">
+    <div id="toolbar" hidden>
+      <button id="prevBtn" title="Previous sheet (←)">◀</button>
+      <span id="sheetLabel"></span>
+      <button id="nextBtn" title="Next sheet (→)">▶</button>
+      <span class="sep"></span>
+      <span class="seg">
+        <button id="oneBtn" title="This sheet holds one page">1 page</button>
+        <button id="twoBtn" title="This sheet holds two pages">2 pages</button>
+      </span>
+      <button id="resetBtn" title="Restore the automatic areas on this sheet">Reset sheet</button>
+      <button id="applyAllBtn" title="Copy this sheet's areas to every sheet">Apply to all sheets</button>
+      <label class="inline" title="Tilt of the selected page, in degrees clockwise">Tilt
+        <input id="angle" type="number" min="-15" max="15" step="0.1" value="0.0">°
+      </label>
+      <span id="flagNote"></span>
+    </div>
+    <div id="stage">
+      <div id="empty">
+        <p><strong>Drop a scanned PDF here</strong> or use “Open…”.</p>
+        <p>JPEG and PNG scans work too: select all the images at once.</p>
+        <p>Everything runs in this browser tab. Your documents are never uploaded.</p>
+      </div>
+      <div id="wrap" hidden>
+        <canvas id="view"></canvas>
+        <div id="overlay"></div>
+      </div>
+    </div>
+  </section>
+
+  <aside id="settings">
+    <h2>Output</h2>
+    <label>Page size
+      <select id="paper">
+        <option>A4</option><option>A5</option><option>A3</option><option>B5</option>
+        <option>Letter</option><option>Legal</option><option value="custom">Custom…</option>
+      </select>
+    </label>
+    <div id="customRow" class="row" hidden>
+      <label>Width (mm)<input id="cw" type="number" min="20" max="2000" value="210"></label>
+      <label>Height (mm)<input id="ch" type="number" min="20" max="2000" value="297"></label>
+    </div>
+    <div class="row">
+      <label>Orientation
+        <select id="orient"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select>
+      </label>
+      <label>Margin (mm)<input id="margin" type="number" min="0" max="100" value="15"></label>
+    </div>
+    <label>Scaling
+      <select id="scaling">
+        <option value="common">Fit to page, same scale for all</option>
+        <option value="each">Fit each page separately</option>
+        <option value="original">Original size</option>
+      </select>
+    </label>
+    <div class="row">
+      <label>Colour
+        <select id="mode">
+          <option value="gray">Greyscale</option>
+          <option value="bw">Black &amp; white</option>
+          <option value="color">Colour</option>
+        </select>
+      </label>
+      <label>Resolution
+        <select id="dpi">
+          <option value="150">150 dpi</option><option value="200">200 dpi</option>
+          <option value="300" selected>300 dpi</option><option value="400">400 dpi</option>
+          <option value="600">600 dpi</option>
+        </select>
+      </label>
+    </div>
+    <div id="bwRow" hidden>
+      <label class="check"><input id="autoThr" type="checkbox" checked> Automatic threshold</label>
+      <label>Threshold <output id="thrOut">128</output><input id="thr" type="range" min="1" max="254" value="128" disabled></label>
+    </div>
+    <div id="qRow">
+      <label>JPEG quality <output id="qOut">80</output><input id="quality" type="range" min="40" max="95" value="80"></label>
+    </div>
+    <label class="check"><input id="deskew" type="checkbox" checked> Straighten tilted pages</label>
+    <label>File name<input id="outName" type="text" spellcheck="false"></label>
+    <div class="row">
+      <button id="exportBtn" class="primary" disabled>Create PDF</button>
+      <button id="cancelBtn" hidden>Cancel</button>
+    </div>
+    <progress id="progress" value="0" max="1" hidden></progress>
+
+    <h2>Preview</h2>
+    <canvas id="preview"></canvas>
+    <p id="previewInfo"></p>
+  </aside>
+</main>
+
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="src/detect.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
