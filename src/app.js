@@ -17,6 +17,12 @@
   const PAPER = { A4: [210, 297], A5: [148, 210], A3: [297, 420], B5: [176, 250], Letter: [215.9, 279.4], Legal: [215.9, 355.6] };
   const PERSISTED = ['paper', 'cw', 'ch', 'orient', 'margin', 'scaling', 'mode', 'dpi', 'autoThr', 'thr', 'quality', 'deskew', 'clean', 'order'];
   const IMAGE_DPI = 200;      // assumed resolution of scans opened as image files
+  // One-click output settings. Values are those of the form controls they set.
+  const PRESETS = {
+    compressed: { mode: 'bw', dpi: 'auto', autoThr: true, clean: true },
+    optimized: { mode: 'gray', dpi: 'auto', quality: '60', clean: true },
+    best: { mode: 'color', dpi: 'auto', quality: '92', clean: false },
+  };
   const DIRS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
   const $ = (id) => document.getElementById(id);
@@ -71,7 +77,8 @@
   }
 
   /* Applies the colour mode and clean-up to a rendered canvas in place; pxPerPt is its
-   * resolution in pixels per point of the scanned sheet. Returns the pixels for B/W. */
+   * resolution in pixels per point of the scanned sheet. Returns the processed pixels,
+   * or null when the canvas was left as rendered (colour without clean-up). */
   function applyTone(canvas, s, pxPerPt) {
     if (s.mode === 'color' && !s.clean) return null;
     const ctx = canvas.getContext('2d');
@@ -80,7 +87,7 @@
     const speck = Math.max(2, Math.round((0.7 * pxPerPt) ** 2)), gap = Math.max(2, Math.round(1.4 * pxPerPt));
     Clean.process(img, { mode: s.mode, autoThr: s.autoThr, thr: s.thr, clean: s.clean, speck, gap });
     ctx.putImageData(img, 0, 0);
-    return s.mode === 'bw' ? img : null;
+    return img;
   }
 
   /* ---------- loading and analysis ---------- */
@@ -123,6 +130,37 @@
     }
   }
 
+  /* Resolution of the scan on a page, in pixels per inch, read from the images it is
+   * made of; 0 when the page holds no sizeable image (for example a vector PDF). */
+  async function scanResolution(page) {
+    const OPS = pdfjsLib.OPS, list = await page.getOperatorList({ intent: 'print' });
+    const view = page.getViewport({ scale: 1, rotation: 0 }), pageArea = view.width * view.height;
+    const mul = (a, b) => [
+      a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1],
+      a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3],
+      a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5],
+    ];
+    const stack = [];
+    let m = [1, 0, 0, 1, 0, 0], best = 0;
+    for (let i = 0; i < list.fnArray.length; i++) {
+      const fn = list.fnArray[i], args = list.argsArray[i];
+      if (fn === OPS.save) stack.push(m);
+      else if (fn === OPS.restore) m = stack.pop() || m;
+      else if (fn === OPS.transform) m = mul(m, args);
+      else if (fn === OPS.paintFormXObjectBegin) { if (Array.isArray(args[0])) m = mul(m, args[0]); }
+      else {
+        let w = 0, h = 0;
+        if (fn === OPS.paintImageXObject) { w = args[1]; h = args[2]; }
+        else if ((fn === OPS.paintImageMaskXObject || fn === OPS.paintInlineImageXObject) && args[0]) { w = args[0].width; h = args[0].height; }
+        if (!w || !h) continue;
+        // An image fills the unit square under the current transform.
+        const wPt = Math.hypot(m[0], m[1]), hPt = Math.hypot(m[2], m[3]);
+        if (wPt * hPt >= pageArea * 0.1) best = Math.max(best, Math.min(w / wPt, h / hPt) * 72);
+      }
+    }
+    return clamp(best, 0, 1200);
+  }
+
   /* Renders one sheet for detection: its features, thumbnail and size in its current rotation. */
   async function scanSheet(i) {
     const sheet = state.sheets[i];
@@ -130,6 +168,7 @@
     const base = page.getViewport({ scale: 1, rotation: (page.rotate + sheet.rot) % 360 });
     sheet.wPt = base.width;
     sheet.hPt = base.height;
+    if (sheet.ppi === undefined) sheet.ppi = await scanResolution(page).catch(() => 0);
     const k = ANALYSIS_PX / Math.max(base.width, base.height);
     const canvas = await renderRegion(i, FULL, Math.round(base.width * k), Math.round(base.height * k));
     state.feats[i] = Detect.extract(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height));
@@ -678,7 +717,7 @@
       paper: $('paper').value, cw: +$('cw').value || 210, ch: +$('ch').value || 297,
       landscape: $('orient').value === 'landscape',
       margin: Math.max(0, +$('margin').value || 0),
-      scaling: $('scaling').value, mode: $('mode').value, dpi: +$('dpi').value,
+      scaling: $('scaling').value, mode: $('mode').value, dpi: $('dpi').value === 'auto' ? 'auto' : +$('dpi').value,
       autoThr: $('autoThr').checked, thr: +$('thr').value, quality: +$('quality').value / 100,
       clean: $('clean').checked,
     };
@@ -692,6 +731,10 @@
     $('thr').disabled = s.autoThr;
     $('thrOut').textContent = s.autoThr ? t('auto') : s.thr;
     $('qOut').textContent = $('quality').value;
+    for (const button of $('presets').children) {
+      const preset = PRESETS[button.dataset.preset];
+      button.classList.toggle('on', Object.keys(preset).every((id) => ($(id).type === 'checkbox' ? $(id).checked : $(id).value) === preset[id]));
+    }
     if (!state.nameEdited && state.baseName) {
       $('outName').value = `${state.baseName}_${s.paper === 'custom' ? 'formatted' : s.paper}.pdf`;
     }
@@ -711,6 +754,15 @@
         if ($(id).type === 'checkbox') $(id).checked = !!saved[id]; else $(id).value = saved[id];
       }
     } catch (e) { /* ignore unreadable settings */ }
+  }
+
+  /* Output resolution for a page placed at the given scale. 'Auto' follows the scan, so
+   * no pixels are invented: black & white gets twice the scan's detail, which keeps
+   * letter edges smooth at little cost in size. */
+  function dpiFor(s, sheet, scale) {
+    if (s.dpi !== 'auto') return s.dpi;
+    const native = (sheet.ppi || 300) / scale;
+    return Math.round(s.mode === 'bw' ? clamp(native * 2, 200, 400) : clamp(native, 100, 600));
   }
 
   /* Output page geometry in points, plus the scale shared by all pages. */
@@ -764,8 +816,8 @@
   async function renderPreview() {
     const sheet = state.sheets[state.cur], page = sheet && sheet.pages[state.active];
     if (!page) return;
-    const token = ++previewToken, s = settings(), g = geometry(s), k = PREVIEW_DPI / 72;
-    const pl = place(sheet, page, g);
+    const token = ++previewToken, s = settings(), g = geometry(s);
+    const pl = place(sheet, page, g), dpi = dpiFor(s, sheet, pl.scale), k = Math.min(PREVIEW_DPI, dpi) / 72;
     let canvas;
     try {
       canvas = await renderRegion(state.cur, page.box, Math.max(1, Math.round(pl.w * k)), Math.max(1, Math.round(pl.h * k)), angleOf(page));
@@ -785,10 +837,30 @@
 
     const list = outputList(), n = list.findIndex((o) => o.i === state.cur && o.j === state.active);
     $('previewInfo').textContent = (n < 0 ? t('previewSkipped') : t('previewPage', { n: n + 1, total: list.length }))
-      + ' · ' + t('scale', { pct: Math.round(pl.scale * 100) });
+      + ' · ' + t('scale', { pct: Math.round(pl.scale * 100) }) + ' · ' + t('dpi', { n: dpi });
   }
 
   /* ---------- export ---------- */
+
+  /* Packs greyscale pixels at 1 or 4 bits each, one row at a time, with each row stored
+   * as its difference from the row above (PNG "Up" filter): on text most of that is
+   * zero, so it compresses much further. */
+  function packRows(d, W, H, bits) {
+    const rowBytes = (W * bits + 7) >> 3, out = new Uint8Array((rowBytes + 1) * H);
+    let prev = new Uint8Array(rowBytes), row = new Uint8Array(rowBytes);
+    for (let y = 0; y < H; y++) {
+      row.fill(0);
+      for (let x = 0, p = y * W * 4; x < W; x++, p += 4) {
+        if (bits === 1) { if (d[p]) row[x >> 3] |= 0x80 >> (x & 7); }
+        else row[x >> 1] |= (d[p] >> 4) << (x & 1 ? 0 : 4);
+      }
+      const at = y * (rowBytes + 1);
+      out[at] = 2;
+      for (let b = 0; b < rowBytes; b++) out[at + 1 + b] = (row[b] - prev[b]) & 255;
+      [prev, row] = [row, prev];
+    }
+    return out;
+  }
 
   const toBlob = (canvas, type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
 
@@ -797,36 +869,41 @@
     const { PDFDocument, pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject } = PDFLib;
     const doc = await PDFDocument.create();
     doc.setCreator('EasyScan2PDF');
-    const g = geometry(s), k = s.dpi / 72;
+    const g = geometry(s);
+    // Greyscale pixels as a Flate-compressed image stream; pdf-lib's own helpers only take JPEG and PNG files.
+    const rawImage = (d, W, H, bits) => doc.context.flateStream(packRows(d, W, H, bits), {
+      Type: 'XObject', Subtype: 'Image', Width: W, Height: H, ColorSpace: 'DeviceGray', BitsPerComponent: bits,
+      DecodeParms: { Predictor: 12, Colors: 1, BitsPerComponent: bits, Columns: W },
+    });
+    const drawRaw = (out, stream, pl, y) => {
+      const name = out.node.newXObject('Im', doc.context.register(stream));
+      out.pushOperators(pushGraphicsState(), concatTransformationMatrix(pl.w, 0, 0, pl.h, pl.x, y), drawObject(name), popGraphicsState());
+    };
 
     for (let n = 0; n < list.length; n++) {
       if (state.cancel) throw new DOMException('Cancelled', 'AbortError');
       const out = doc.addPage([g.PW, g.PH]);
       if (list[n].blank) { onProgress(n + 1, list.length); continue; }
       const sheet = state.sheets[list[n].i], page = sheet.pages[list[n].j];
-      const pl = place(sheet, page, g);
+      const pl = place(sheet, page, g), k = dpiFor(s, sheet, pl.scale) / 72;
       const pxW = Math.max(1, Math.round(pl.w * k)), pxH = Math.max(1, Math.round(pl.h * k));
       const canvas = await renderRegion(list[n].i, page.box, pxW, pxH, angleOf(page));
       const img = applyTone(canvas, s, k * pl.scale);
       const y = g.PH - pl.y - pl.h;   // PDF origin is bottom-left
 
-      if (img) {
+      if (s.mode === 'bw') {
         // Black & white: 1 bit per pixel, far smaller than JPEG and sharper for text.
-        const rowBytes = (pxW + 7) >> 3, bits = new Uint8Array(rowBytes * pxH), d = img.data;
-        for (let py = 0; py < pxH; py++) {
-          for (let px = 0; px < pxW; px++) {
-            if (d[(py * pxW + px) * 4]) bits[py * rowBytes + (px >> 3)] |= 0x80 >> (px & 7);
-          }
-        }
-        const stream = doc.context.flateStream(bits, {
-          Type: 'XObject', Subtype: 'Image', Width: pxW, Height: pxH, ColorSpace: 'DeviceGray', BitsPerComponent: 1,
-        });
-        const name = out.node.newXObject('Im', doc.context.register(stream));
-        out.pushOperators(pushGraphicsState(), concatTransformationMatrix(pl.w, 0, 0, pl.h, pl.x, y), drawObject(name), popGraphicsState());
+        drawRaw(out, rawImage(img.data, pxW, pxH, 1), pl, y);
       } else {
-        const blob = await toBlob(canvas, 'image/jpeg', s.quality);
-        const jpg = await doc.embedJpg(await blob.arrayBuffer());
-        out.drawImage(jpg, { x: pl.x, y, width: pl.w, height: pl.h });
+        // Greyscale pages of text on clean white paper pack smaller, and sharper, as
+        // 16 greys than as JPEG; pages with pictures do not. Keep whichever is smaller.
+        const jpeg = await (await toBlob(canvas, 'image/jpeg', s.quality)).arrayBuffer();
+        const packed = s.mode === 'gray' ? rawImage(img.data, pxW, pxH, 4) : null;
+        if (packed && packed.contents.length < jpeg.byteLength) {
+          drawRaw(out, packed, pl, y);
+        } else {
+          out.drawImage(await doc.embedJpg(jpeg), { x: pl.x, y, width: pl.w, height: pl.h });
+        }
       }
       canvas.width = canvas.height = 0;
       onProgress(n + 1, list.length);
@@ -973,6 +1050,14 @@
   $('organiseBtn').addEventListener('click', () => { if (state.sheets.length) { renderOrganiser(); $('organiser').showModal(); } });
   $('orgClose').addEventListener('click', () => $('organiser').close());
   $('orgReset').addEventListener('click', () => setOrder(naturalList()));
+  for (const button of $('presets').children) {
+    button.addEventListener('click', () => {
+      for (const [id, value] of Object.entries(PRESETS[button.dataset.preset])) {
+        if ($(id).type === 'checkbox') $(id).checked = value; else $(id).value = value;
+      }
+      updateSettingsUI();
+    });
+  }
   $('exportBtn').addEventListener('click', exportPdf);
   $('cancelBtn').addEventListener('click', () => { state.cancel = true; });
   $('outName').addEventListener('input', () => { state.nameEdited = true; });
@@ -1074,7 +1159,7 @@
   function setLanguage(code) {
     I18n.set(code);
     $('lang').value = I18n.lang;
-    for (const option of $('dpi').options) option.textContent = t('dpi', { n: option.value });
+    for (const option of $('dpi').options) option.textContent = option.value === 'auto' ? t('dpiAuto') : t('dpi', { n: option.value });
     // "Previous" points towards the start of the line, which is the right in right-to-left languages.
     const rtl = document.documentElement.dir === 'rtl';
     $('prevBtn').textContent = rtl ? '▶' : '◀';

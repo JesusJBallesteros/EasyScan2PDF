@@ -200,6 +200,8 @@ progress { width: 100%; margin: 4px 0 10px; }
 #angle { width: 64px; }
 #rotateSel { max-width: 150px; }
 button.wide { display: block; width: 100%; margin-bottom: 10px; }
+#presets { display: flex; margin-bottom: 12px; }
+#presets button { flex: 1 1 auto; padding: 5px 2px; font-size: 12px; white-space: nowrap; }
 
 /* Page organiser */
 dialog {

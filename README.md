@@ -101,21 +101,38 @@ then refer to that page.
 
 | # | Setting | Meaning |
 |---|---|---|
-| 1 | **Page size** | A4, A5, A3, B5, Letter, Legal, or *Custom…* to type a width and height in millimetres. |
-| 2 | **Orientation** | Portrait or landscape. |
-| 3 | **Margin** | Minimum white border around the text, in millimetres. The dashed line in the preview shows it. |
-| 4 | **Scaling** | *Fit to page, same scale for all* keeps the text the same size on every page (recommended). *Fit each page separately* enlarges each page as much as possible. *Original size* keeps the size of the scan. |
-| 5 | **Colour** | *Black & white* gives the smallest files and the crispest text. *Greyscale* suits pencil notes and photographs. *Colour* keeps everything. |
-| 6 | **Resolution** | Dots per inch of the output. 300 dpi is a good default; going above the resolution of the original scan adds size but no detail. |
-| 7 | **Threshold** | Black & white only. Leave *Automatic threshold* ticked, or untick it and move the slider: right makes the text heavier, left makes it lighter. Greyscale and colour show a **JPEG quality** slider here instead. |
-| 8 | **Straighten tilted pages** | Turns each page by its tilt so the lines come out level. Untick to keep pages as scanned. |
-| 9 | **Clean up the scan** | Makes the paper pure white, evens out yellowing and the shadow near the binding, darkens the ink and removes isolated specks. Small marks next to text — accents, dots, punctuation — are kept. Untick it for pages with photographs or pale pencil notes you want exactly as scanned. |
-| 10 | **Pages to export** | Leave empty for the whole document, or type page numbers and ranges of the output, such as `1-10, 15`. |
-| 11 | **Pages per file** | Leave empty for a single PDF. Type a number to split the output into several files of that many pages, named `name_1.pdf`, `name_2.pdf`, … Chrome, Edge and Brave ask for a folder to put them in; other browsers download them one by one. |
-| 12 | **Organise pages…** | Opens the page organiser — see section 5. |
-| 13 | **File name** | Name of the PDF to create. |
-| 14 | **Create PDF** | Writes the document. Chrome, Edge and Brave ask where to save it; other browsers put it in the Downloads folder. **Cancel** stops a long export. |
-| 15 | **Preview** | Updates as you change the settings. |
+| 1 | **Presets** | One click sets the options below. **Compressed**: black & white, cleaned up — the smallest file, ideal for plain text. **Optimized**: greyscale at the resolution of the scan, cleaned up — a good balance, and the starting point. **Best quality**: colour, high JPEG quality, no clean-up — the most faithful, and the largest. The button stays highlighted while the options match it; you can still change any option afterwards. |
+| 2 | **Page size** | A4, A5, A3, B5, Letter, Legal, or *Custom…* to type a width and height in millimetres. |
+| 3 | **Orientation** | Portrait or landscape. |
+| 4 | **Margin** | Minimum white border around the text, in millimetres. The dashed line in the preview shows it. |
+| 5 | **Scaling** | *Fit to page, same scale for all* keeps the text the same size on every page (recommended). *Fit each page separately* enlarges each page as much as possible. *Original size* keeps the size of the scan. |
+| 6 | **Colour** | *Black & white* gives the smallest files and the crispest text. *Greyscale* suits pencil notes and photographs. *Colour* keeps everything. |
+| 7 | **Resolution** | *Auto* writes each page at the resolution the scan really has, so the file holds no invented pixels (black & white pages get twice that, which keeps letter edges smooth at little cost). The value used is shown under the preview. Choose a fixed value only for a special need: above the scan's own resolution it adds size but no detail. |
+| 8 | **Threshold** | Black & white only. Leave *Automatic threshold* ticked, or untick it and move the slider: right makes the text heavier, left makes it lighter. Greyscale and colour show a **JPEG quality** slider here instead. |
+| 9 | **Straighten tilted pages** | Turns each page by its tilt so the lines come out level. Untick to keep pages as scanned. |
+| 10 | **Clean up the scan** | Makes the paper pure white, evens out yellowing and the shadow near the binding, darkens the ink and removes isolated specks. Small marks next to text — accents, dots, punctuation — are kept. Untick it for pages with photographs or pale pencil notes you want exactly as scanned. |
+| 11 | **Pages to export** | Leave empty for the whole document, or type page numbers and ranges of the output, such as `1-10, 15`. |
+| 12 | **Pages per file** | Leave empty for a single PDF. Type a number to split the output into several files of that many pages, named `name_1.pdf`, `name_2.pdf`, … Chrome, Edge and Brave ask for a folder to put them in; other browsers download them one by one. |
+| 13 | **Organise pages…** | Opens the page organiser — see section 5. |
+| 14 | **File name** | Name of the PDF to create. |
+| 15 | **Create PDF** | Writes the document. Chrome, Edge and Brave ask where to save it; other browsers put it in the Downloads folder. **Cancel** stops a long export. |
+| 16 | **Preview** | Updates as you change the settings. The line under it gives the page number, the scale and the resolution that will be used. |
+
+### File size
+
+The output is a new picture of every page, so its size depends on the options,
+not on the size of the original:
+
+- **Compressed** is usually smaller than the scan.
+- **Optimized** is usually of the same order as the scan. Pages of plain text
+  are stored in 16 shades of grey, which is both smaller and sharper than JPEG;
+  pages with pictures are stored as JPEG.
+- **Best quality** is larger than the scan.
+
+Some scanners produce files that separate text from background and compress
+each in its own way. Those are hard to beat: expect *Optimized* to come out
+somewhat larger than such an original, and use *Compressed* when size matters
+most.
 
 Your output settings are remembered for next time.
 

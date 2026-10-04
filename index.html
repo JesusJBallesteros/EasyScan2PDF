@@ -104,6 +104,11 @@
 
   <aside id="settings">
     <h2 data-i18n="output">Output</h2>
+    <div id="presets" class="seg">
+      <button data-preset="compressed" data-i18n="presetCompressed" data-i18n-title="presetCompressedTitle">Compressed</button>
+      <button data-preset="optimized" data-i18n="presetOptimized" data-i18n-title="presetOptimizedTitle">Optimized</button>
+      <button data-preset="best" data-i18n="presetBest" data-i18n-title="presetBestTitle">Best quality</button>
+    </div>
     <label><span data-i18n="pageSize">Page size</span>
       <select id="paper">
         <option>A4</option><option>A5</option><option>A3</option><option>B5</option>
@@ -140,8 +145,9 @@
       </label>
       <label><span data-i18n="resolution">Resolution</span>
         <select id="dpi">
+          <option value="auto" selected>Auto</option>
           <option value="150">150 dpi</option><option value="200">200 dpi</option>
-          <option value="300" selected>300 dpi</option><option value="400">400 dpi</option>
+          <option value="300">300 dpi</option><option value="400">400 dpi</option>
           <option value="600">600 dpi</option>
         </select>
       </label>
@@ -151,7 +157,7 @@
       <label><span data-i18n="threshold">Threshold</span> <output id="thrOut">128</output><input id="thr" type="range" min="1" max="254" value="128" disabled></label>
     </div>
     <div id="qRow">
-      <label><span data-i18n="quality">JPEG quality</span> <output id="qOut">80</output><input id="quality" type="range" min="40" max="95" value="80"></label>
+      <label><span data-i18n="quality">JPEG quality</span> <output id="qOut">60</output><input id="quality" type="range" min="40" max="95" value="60"></label>
     </div>
     <label class="check"><input id="deskew" type="checkbox" checked> <span data-i18n="deskew">Straighten tilted pages</span></label>
     <label class="check"><input id="clean" type="checkbox" checked> <span data-i18n="clean">Clean up the scan (white paper, no specks)</span></label>
