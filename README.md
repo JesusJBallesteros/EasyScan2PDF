@@ -1,11 +1,11 @@
 # EasyScan2PDF
 
 Turn scanned documents — typically two book pages per landscape sheet — into a
-clean PDF with one page per sheet (A4 by default).
+clean PDF with one page per sheet.
 
 ## ▶ [Open EasyScan2PDF](https://jesusjballesteros.github.io/EasyScan2PDF/)
 
-Nothing to download or set up: the link opens the app in your browser.
+No downloads, no set up: directly in your browser.
 
 **Your documents stay on your device.** The app works entirely inside the
 browser, makes no network requests with your files, and keeps working offline.
@@ -135,8 +135,7 @@ scans/, formatted/     personal documents — git-ignored
 ```
 
 **Publish:** push the repository to GitHub, then *Settings → Pages → Deploy from
-a branch → `main` / root*. The app is served at
-`https://jesusjballesteros.github.io/EasyScan2PDF/`. After changing app files,
+a branch → `main` / root*. After changing app files,
 bump `CACHE` in `sw.js` so installed copies drop their old cache.
 
 **Run locally:** double-click `index.html`, or, to test installation and offline
