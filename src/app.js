@@ -12,11 +12,12 @@
   const MM = 72 / 25.4;
   const FULL = { x: 0, y: 0, w: 1, h: 1 };
   const PAPER = { A4: [210, 297], A5: [148, 210], A3: [297, 420], B5: [176, 250], Letter: [215.9, 279.4], Legal: [215.9, 355.6] };
-  const PERSISTED = ['paper', 'cw', 'ch', 'orient', 'margin', 'scaling', 'mode', 'dpi', 'autoThr', 'thr', 'quality', 'deskew', 'order'];
+  const PERSISTED = ['paper', 'cw', 'ch', 'orient', 'margin', 'scaling', 'mode', 'dpi', 'autoThr', 'thr', 'quality', 'deskew', 'clean', 'order'];
   const IMAGE_DPI = 200;      // assumed resolution of scans opened as image files
   const DIRS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
   const $ = (id) => document.getElementById(id);
+  const t = I18n.t;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
   const state = {
@@ -62,21 +63,15 @@
     });
   }
 
-  /* Converts a rendered canvas to greyscale or black & white in place. Returns the pixels for B/W. */
-  function applyTone(canvas, s) {
-    if (s.mode === 'color') return null;
+  /* Applies the colour mode and clean-up to a rendered canvas in place; pxPerPt is its
+   * resolution in pixels per point of the scanned sheet. Returns the pixels for B/W. */
+  function applyTone(canvas, s, pxPerPt) {
+    if (s.mode === 'color' && !s.clean) return null;
     const ctx = canvas.getContext('2d');
     const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const d = img.data, n = canvas.width * canvas.height, hist = new Uint32Array(256);
-    for (let p = 0; p < n * 4; p += 4) {
-      const g = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
-      d[p] = d[p + 1] = d[p + 2] = g;
-      hist[g]++;
-    }
-    if (s.mode === 'bw') {
-      const thr = s.autoThr ? Detect.otsu(hist, n).thr : s.thr;
-      for (let p = 0; p < n * 4; p += 4) d[p] = d[p + 1] = d[p + 2] = d[p] > thr ? 255 : 0;
-    }
+    // Specks: marks up to a quarter of a millimetre across with half a millimetre of clear paper around.
+    const speck = Math.max(2, Math.round((0.7 * pxPerPt) ** 2)), gap = Math.max(2, Math.round(1.4 * pxPerPt));
+    Clean.process(img, { mode: s.mode, autoThr: s.autoThr, thr: s.thr, clean: s.clean, speck, gap });
     ctx.putImageData(img, 0, 0);
     return s.mode === 'bw' ? img : null;
   }
@@ -95,7 +90,7 @@
   async function loadBytes(bytes, name) {
     if (state.busy) return;
     setBusy(true);
-    status('Opening…');
+    status(t('opening'));
     try {
       const pdf = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
       if (state.pdf) state.pdf.destroy();
@@ -111,7 +106,7 @@
       applyAnalysis();
       updateSettingsUI();
     } catch (err) {
-      status(err.name === 'PasswordException' ? 'This PDF is password protected.' : 'Could not open this file: ' + err.message);
+      status(err.name === 'PasswordException' ? t('passwordProtected') : t('cannotOpen', { msg: err.message }));
     } finally {
       setBusy(false);
     }
@@ -123,7 +118,7 @@
     state.feats = [];
     state.sheets = [];
     for (let i = 0; i < n; i++) {
-      status(`Analysing sheet ${i + 1} of ${n}…`);
+      status(t('analysing', { i: i + 1, n }));
       const page = await state.pdf.getPage(i + 1);
       const base = page.getViewport({ scale: 1 });
       const k = ANALYSIS_PX / Math.max(base.width, base.height);
@@ -170,7 +165,7 @@
   function updateSummary() {
     const pages = outputList().length;
     const check = state.sheets.filter((s) => s.pages.some((p) => p.flag === 'review')).length;
-    status(`${state.sheets.length} sheets → ${pages} pages` + (check ? ` · ${check} to check` : ''));
+    status(t('summary', { sheets: state.sheets.length, pages }) + (check ? t('toCheck', { n: check }) : ''));
   }
 
   /* ---------- thumbnails ---------- */
@@ -210,7 +205,7 @@
       : sheet.pages.some((p) => p.manual) ? 'manual' : '';
     const dot = el.children[1];
     dot.className = kind ? 'dot ' + kind : '';
-    dot.title = { review: 'Check this sheet', blank: 'Blank page', manual: 'Adjusted by hand', '': '' }[kind];
+    dot.title = { review: t('dotReview'), blank: t('dotBlank'), manual: t('dotManual'), '': '' }[kind];
   }
 
   /* ---------- editor ---------- */
@@ -258,13 +253,13 @@
   /* Redraws everything that depends on the current sheet's areas. */
   function refreshSheet() {
     const sheet = state.sheets[state.cur];
-    $('sheetLabel').textContent = `Sheet ${state.cur + 1} / ${state.sheets.length}`;
+    $('sheetLabel').textContent = t('sheetOf', { i: state.cur + 1, n: state.sheets.length });
     $('prevBtn').disabled = state.cur === 0;
     $('nextBtn').disabled = state.cur === state.sheets.length - 1;
     $('oneBtn').classList.toggle('on', sheet.pages.length === 1);
     $('twoBtn').classList.toggle('on', sheet.pages.length === 2);
-    $('flagNote').textContent = sheet.pages.some((p) => p.flag === 'review') ? 'Text found outside the common frame — check the areas'
-      : sheet.pages.some((p) => p.flag === 'blank' && !p.include) ? 'Blank page skipped' : '';
+    $('flagNote').textContent = sheet.pages.some((p) => p.flag === 'review') ? t('flagReview')
+      : sheet.pages.some((p) => p.flag === 'blank' && !p.include) ? t('flagBlank') : '';
     const active = sheet.pages[state.active];
     $('angle').value = active ? (active.angle || 0).toFixed(1) : '0.0';
     $('angle').disabled = !active || !$('deskew').checked;
@@ -295,12 +290,12 @@
 
       const tag = document.createElement('label');
       tag.className = 'tag';
-      tag.title = 'Include this page in the output';
+      tag.title = t('includeTitle');
       const check = document.createElement('input');
       check.type = 'checkbox';
       check.checked = p.include;
       check.addEventListener('change', () => { p.include = check.checked; state.active = j; refreshSheet(); });
-      tag.append(check, p.include ? `Page ${number}` : 'Skipped');
+      tag.append(check, p.include ? t('page', { n: number }) : t('skipped'));
       el.append(tag);
 
       for (const dir of DIRS) {
@@ -391,18 +386,30 @@
     schedulePreview();
   }
 
-  /* Copies the current sheet's areas to every sheet; skipped pages stay skipped. */
-  function applyToAll() {
+  /* Copies the current sheet's areas to other sheets; skipped pages stay skipped.
+   * scope: 'all' | 'after' (this sheet onwards) | 'left' | 'right' (one side of every two-page sheet). */
+  function applyAreas(scope) {
     const src = state.sheets[state.cur];
+    if (!src || !scope) return;
+    const side = scope === 'left' ? 0 : scope === 'right' ? 1 : -1;
+    if (side >= 0 && src.pages.length !== 2) { $('flagNote').textContent = t('needTwoPages'); return; }
     state.sheets.forEach((sheet, i) => {
-      if (sheet === src) return;
-      const same = sheet.pages.length === src.pages.length;
-      sheet.pages = src.pages.map((p, j) => ({
-        box: { ...p.box }, flag: null, manual: true,
-        angle: same ? sheet.pages[j].angle : 0,   // tilt belongs to each scan, not to the area
-        include: same ? sheet.pages[j].include : true,
-      }));
-      sheet.split = src.split;
+      if (sheet === src || (scope === 'after' && i < state.cur)) return;
+      if (side >= 0) {
+        if (sheet.pages.length !== 2 || sheet.split !== src.split) return;
+        const page = sheet.pages[side];
+        page.box = { ...src.pages[side].box };
+        page.manual = true;
+        if (page.flag === 'review') page.flag = null;
+      } else {
+        const same = sheet.pages.length === src.pages.length;
+        sheet.pages = src.pages.map((p, j) => ({
+          box: { ...p.box }, flag: null, manual: true,
+          angle: same ? sheet.pages[j].angle : 0,   // tilt belongs to each scan, not to the area
+          include: same ? sheet.pages[j].include : true,
+        }));
+        sheet.split = src.split;
+      }
       drawThumb(i);
     });
     refreshSheet();
@@ -417,6 +424,7 @@
       margin: Math.max(0, +$('margin').value || 0),
       scaling: $('scaling').value, mode: $('mode').value, dpi: +$('dpi').value,
       autoThr: $('autoThr').checked, thr: +$('thr').value, quality: +$('quality').value / 100,
+      clean: $('clean').checked,
     };
   }
 
@@ -426,7 +434,7 @@
     $('bwRow').hidden = s.mode !== 'bw';
     $('qRow').hidden = s.mode === 'bw';
     $('thr').disabled = s.autoThr;
-    $('thrOut').textContent = s.autoThr ? 'auto' : s.thr;
+    $('thrOut').textContent = s.autoThr ? t('auto') : s.thr;
     $('qOut').textContent = $('quality').value;
     if (!state.nameEdited && state.baseName) {
       $('outName').value = `${state.baseName}_${s.paper === 'custom' ? 'formatted' : s.paper}.pdf`;
@@ -492,7 +500,7 @@
       canvas = await renderRegion(state.cur, page.box, Math.max(1, Math.round(pl.w * k)), Math.max(1, Math.round(pl.h * k)), angleOf(page));
     } catch (e) { return; }
     if (token !== previewToken) return;
-    applyTone(canvas, s);
+    applyTone(canvas, s, k * pl.scale);
 
     const out = $('preview'), ctx = out.getContext('2d');
     out.width = Math.round(g.PW * k);
@@ -505,7 +513,8 @@
     ctx.strokeRect(g.m * k, g.m * k, g.availW * k, g.availH * k);
 
     const list = outputList(), n = list.findIndex((o) => o.i === state.cur && o.j === state.active);
-    $('previewInfo').textContent = (n < 0 ? 'Skipped page' : `Page ${n + 1} of ${list.length}`) + ` · scale ${Math.round(pl.scale * 100)}%`;
+    $('previewInfo').textContent = (n < 0 ? t('previewSkipped') : t('previewPage', { n: n + 1, total: list.length }))
+      + ' · ' + t('scale', { pct: Math.round(pl.scale * 100) });
   }
 
   /* ---------- export ---------- */
@@ -525,7 +534,7 @@
       const pl = place(sheet, page, g);
       const pxW = Math.max(1, Math.round(pl.w * k)), pxH = Math.max(1, Math.round(pl.h * k));
       const canvas = await renderRegion(list[n].i, page.box, pxW, pxH, angleOf(page));
-      const img = applyTone(canvas, s);
+      const img = applyTone(canvas, s, k * pl.scale);
       const out = doc.addPage([g.PW, g.PH]);
       const y = g.PH - pl.y - pl.h;   // PDF origin is bottom-left
 
@@ -576,7 +585,7 @@
     try {
       const bytes = await buildPdf(settings(), (done, total) => {
         $('progress').value = done / total;
-        status(`Creating page ${done} of ${total}…`);
+        status(t('creating', { i: done, n: total }));
       });
       if (handle) {
         const writable = await handle.createWritable();
@@ -590,9 +599,9 @@
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       }
-      status(`Saved ${handle ? handle.name : name} · ${(bytes.length / 1048576).toFixed(1)} MB`);
+      status(t('saved', { name: handle ? handle.name : name, mb: (bytes.length / 1048576).toFixed(1) }));
     } catch (err) {
-      status(err.name === 'AbortError' ? 'Export cancelled.' : 'Export failed: ' + err.message);
+      status(err.name === 'AbortError' ? t('cancelled') : t('exportFailed', { msg: err.message }));
     } finally {
       $('cancelBtn').hidden = true;
       $('progress').hidden = true;
@@ -610,9 +619,9 @@
 
     const images = files.filter((f) => /^image\/(jpeg|png)$/.test(f.type))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    if (!images.length) { if (files.length) status('Choose a PDF, or JPEG / PNG images.'); return; }
+    if (!images.length) { if (files.length) status(t('chooseFiles')); return; }
     if (state.busy) return;
-    status('Reading images…');
+    status(t('readingImages'));
     try {
       const doc = await PDFLib.PDFDocument.create(), k = 72 / IMAGE_DPI;
       for (const file of images) {
@@ -622,7 +631,7 @@
       }
       await loadBytes(await doc.save(), images.length === 1 ? images[0].name : 'scans');
     } catch (err) {
-      status('Could not read these images: ' + err.message);
+      status(t('cannotReadImages', { msg: err.message }));
     }
   }
 
@@ -643,7 +652,7 @@
   $('oneBtn').addEventListener('click', () => setSheetLayout(1));
   $('twoBtn').addEventListener('click', () => setSheetLayout(2));
   $('resetBtn').addEventListener('click', resetSheet);
-  $('applyAllBtn').addEventListener('click', applyToAll);
+  $('applySel').addEventListener('change', () => { applyAreas($('applySel').value); $('applySel').value = ''; });
   $('exportBtn').addEventListener('click', exportPdf);
   $('cancelBtn').addEventListener('click', () => { state.cancel = true; });
   $('outName').addEventListener('input', () => { state.nameEdited = true; });
@@ -686,8 +695,43 @@
     });
   }
 
+  /* ---------- language and theme ---------- */
+
+  function saveUi() {
+    try {
+      localStorage.setItem('easyscan2pdf-ui', JSON.stringify({ lang: $('lang').value, theme: $('theme').value }));
+    } catch (e) { /* storage unavailable */ }
+  }
+
+  function setLanguage(code) {
+    I18n.set(code);
+    $('lang').value = I18n.lang;
+    for (const option of $('dpi').options) option.textContent = t('dpi', { n: option.value });
+    updateSettingsUI();
+    if (state.sheets.length) {
+      state.sheets.forEach((sheet, i) => drawThumb(i));
+      refreshSheet();
+    } else {
+      status('');
+    }
+  }
+
+  function setTheme(theme) {
+    $('theme').value = theme;
+    if (theme === 'auto') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+  }
+
+  for (const [code, name] of Object.entries(I18n.names)) $('lang').add(new Option(name, code));
+  $('lang').addEventListener('change', () => { setLanguage($('lang').value); saveUi(); });
+  $('theme').addEventListener('change', () => { setTheme($('theme').value); saveUi(); });
+
+  let ui = {};
+  try { ui = JSON.parse(localStorage.getItem('easyscan2pdf-ui') || '{}'); } catch (e) { /* use defaults */ }
+
   restoreSettings();
-  updateSettingsUI();
+  setTheme(['light', 'dark'].includes(ui.theme) ? ui.theme : 'auto');
+  setLanguage(ui.lang || I18n.preferred());
 
   // Entry points for scripted use and tests.
   window.EasyScan2PDF = { state, loadBytes, buildPdf, settings };

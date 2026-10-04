@@ -1,9 +1,9 @@
 /* Offline support. Caches the app's own files only; documents are opened in the
  * page and never pass through here. */
-const CACHE = 'easyscan2pdf-v1';
+const CACHE = 'easyscan2pdf-v2';
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest',
-  'src/style.css', 'src/detect.js', 'src/app.js',
+  'src/style.css', 'src/i18n.js', 'src/detect.js', 'src/clean.js', 'src/app.js',
   'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'vendor/pdf-lib.min.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
