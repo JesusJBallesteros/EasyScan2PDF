@@ -1,15 +1,23 @@
 /* Offline support. Caches the app's own files only; documents are opened in the
  * page and never pass through here. */
-const CACHE = 'easyscan2pdf-v2';
+importScripts('src/version.js');
+
+const CACHE = 'easyscan2pdf-' + self.APP_VERSION.number;
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest',
-  'src/style.css', 'src/i18n.js', 'src/detect.js', 'src/clean.js', 'src/app.js',
+  'src/version.js', 'src/style.css', 'src/i18n.js', 'src/detect.js', 'src/clean.js', 'src/app.js',
   'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'vendor/pdf-lib.min.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
+/* Downloads every app file again, past the browser's own cache. */
+function refresh() {
+  return caches.open(CACHE).then((cache) => Promise.all(ASSETS.map((url) =>
+    fetch(url, { cache: 'reload' }).then((res) => { if (res.ok) return cache.put(url, res); }))));
+}
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
+  event.waitUntil(refresh().then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
@@ -20,12 +28,13 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Network first, so a published update shows up at once; the cache serves when offline.
+// Network first, always checking with the server, so a published update shows
+// up on the next load; the cache serves when offline.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   event.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
@@ -35,4 +44,11 @@ self.addEventListener('fetch', (event) => {
       })
       .catch(() => caches.match(req, { ignoreSearch: true })),
   );
+});
+
+// The page's "Update" button asks for a fresh copy of everything.
+self.addEventListener('message', (event) => {
+  if (!event.data || event.data.type !== 'refresh') return;
+  const reply = (text) => { if (event.ports[0]) event.ports[0].postMessage(text); };
+  event.waitUntil(refresh().then(() => reply('done'), () => reply('failed')));
 });

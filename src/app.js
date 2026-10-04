@@ -5,10 +5,13 @@
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 
   const ANALYSIS_PX = 1400;   // longest side of the render used for detection
-  const VIEW_PX = 1800;       // longest side of the editor render
+  const VIEW_PX = 1800;       // longest side of the editor render at 100% zoom
+  const VIEW_MAX_PX = 5000;
   const THUMB_PX = 300;
   const PREVIEW_DPI = 100;
   const MIN_BOX = 0.03;       // smallest allowed area, fraction of the sheet
+  const MAX_ZOOM = 6;
+  const HISTORY = 60;         // undo steps kept
   const MM = 72 / 25.4;
   const FULL = { x: 0, y: 0, w: 1, h: 1 };
   const PAPER = { A4: [210, 297], A5: [148, 210], A3: [297, 420], B5: [176, 250], Letter: [215.9, 279.4], Legal: [215.9, 355.6] };
@@ -22,8 +25,11 @@
 
   const state = {
     pdf: null, baseName: '', nameEdited: false,
-    feats: [], sheets: [],   // sheets[i] = { wPt, hPt, thumb, pages, auto }
-    cur: 0, active: 0,
+    feats: [],
+    sheets: [],        // { rot, wPt, hPt, thumb, pages, auto, split, autoSplit }
+    order: null,       // output order as page keys once the user rearranged it; null = natural
+    blankSeq: 0,       // counter for the keys of inserted blank pages
+    cur: 0, active: 0, zoom: 1,
     busy: false, cancel: false,
   };
 
@@ -42,8 +48,9 @@
   function renderRegion(index, box, pxW, pxH, angle = 0) {
     return queued(async () => {
       const page = await state.pdf.getPage(index + 1);
-      const scale = pxW / (box.w * page.getViewport({ scale: 1 }).width);
-      const viewport = page.getViewport({ scale });
+      const rotation = (page.rotate + state.sheets[index].rot) % 360;
+      const scale = pxW / (box.w * page.getViewport({ scale: 1, rotation }).width);
+      const viewport = page.getViewport({ scale, rotation });
       const canvas = document.createElement('canvas');
       canvas.width = pxW;
       canvas.height = pxH;
@@ -82,9 +89,9 @@
 
   function setBusy(busy) {
     state.busy = busy;
-    $('openBtn').disabled = busy;
-    $('layoutSel').disabled = busy;
+    for (const id of ['openBtn', 'layoutSel', 'rotateSel', 'updateBtn']) $(id).disabled = busy;
     $('exportBtn').disabled = busy || !state.sheets.length;
+    updateHistoryButtons();
   }
 
   async function loadBytes(bytes, name) {
@@ -98,11 +105,15 @@
       state.baseName = name.replace(/\.(pdf|jpe?g|png)$/i, '');
       state.nameEdited = false;
       state.cur = state.active = 0;
+      state.zoom = 1;
+      $('range').value = '';
       $('docName').textContent = name;
       await scan();
       $('empty').hidden = true;
       $('wrap').hidden = false;
       $('toolbar').hidden = false;
+      history.length = 0;
+      historyAt = -1;
       applyAnalysis();
       updateSettingsUI();
     } catch (err) {
@@ -112,49 +123,117 @@
     }
   }
 
-  /* Pass 1 over every sheet: detection features and thumbnails. */
+  /* Renders one sheet for detection: its features, thumbnail and size in its current rotation. */
+  async function scanSheet(i) {
+    const sheet = state.sheets[i];
+    const page = await state.pdf.getPage(i + 1);
+    const base = page.getViewport({ scale: 1, rotation: (page.rotate + sheet.rot) % 360 });
+    sheet.wPt = base.width;
+    sheet.hPt = base.height;
+    const k = ANALYSIS_PX / Math.max(base.width, base.height);
+    const canvas = await renderRegion(i, FULL, Math.round(base.width * k), Math.round(base.height * k));
+    state.feats[i] = Detect.extract(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height));
+    sheet.thumb = document.createElement('canvas');
+    sheet.thumb.width = THUMB_PX;
+    sheet.thumb.height = Math.round(THUMB_PX * base.height / base.width);
+    sheet.thumb.getContext('2d').drawImage(canvas, 0, 0, sheet.thumb.width, sheet.thumb.height);
+  }
+
+  /* Pass 1 over every sheet. Sheets scanned sideways are turned upright here. */
   async function scan() {
     const n = state.pdf.numPages;
     state.feats = [];
     state.sheets = [];
+    state.order = null;
     for (let i = 0; i < n; i++) {
       status(t('analysing', { i: i + 1, n }));
-      const page = await state.pdf.getPage(i + 1);
-      const base = page.getViewport({ scale: 1 });
-      const k = ANALYSIS_PX / Math.max(base.width, base.height);
-      const canvas = await renderRegion(i, FULL, Math.round(base.width * k), Math.round(base.height * k));
-      state.feats.push(Detect.extract(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height)));
-      const thumb = document.createElement('canvas');
-      thumb.width = THUMB_PX;
-      thumb.height = Math.round(THUMB_PX * base.height / base.width);
-      thumb.getContext('2d').drawImage(canvas, 0, 0, thumb.width, thumb.height);
-      state.sheets.push({ wPt: base.width, hPt: base.height, thumb, pages: [], auto: [] });
+      state.sheets[i] = { rot: 0, wPt: 0, hPt: 0, thumb: null, pages: [], auto: [], split: null, autoSplit: null };
+      await scanSheet(i);
+      const turn = Detect.sideways(state.feats[i]);
+      if (turn) {
+        state.sheets[i].rot = turn;
+        await scanSheet(i);
+      }
     }
   }
 
   const clonePages = (pages) => pages.map((p) => ({ ...p, box: { ...p.box } }));
 
-  /* Pass 2: document-wide detection. Replaces all areas, including manual edits. */
-  function applyAnalysis() {
-    const result = Detect.analyze(state.feats, $('layoutSel').value);
-    state.sheets.forEach((sheet, i) => {
+  /* Stores the detected areas of the given sheets. */
+  function assignAnalysis(result, indices) {
+    for (const i of indices) {
+      const sheet = state.sheets[i];
       sheet.auto = result[i].pages.map((p) => ({ box: p.box, angle: p.angle, flag: p.flag, include: p.flag !== 'blank', manual: false }));
       sheet.autoSplit = result[i].split;
       sheet.pages = clonePages(sheet.auto);
       sheet.split = sheet.autoSplit;   // 'h' left | right, 'v' top | bottom, null single page
-    });
-    buildThumbs();
-    showSheet(Math.min(state.cur, state.sheets.length - 1));
-    updateSummary();
+    }
   }
 
-  /* Included pages in reading order. */
-  function outputList() {
+  /* Pass 2: document-wide detection. Replaces all areas, including manual edits. */
+  function applyAnalysis() {
+    assignAnalysis(Detect.analyze(state.feats, $('layoutSel').value), state.sheets.map((s, i) => i));
+    state.order = null;
+    buildThumbs();
+    showSheet(Math.min(state.cur, state.sheets.length - 1));
+    commit();
+  }
+
+  /* Turns sheets by a multiple of 90° and detects their areas again. value: 'this:90', 'all:180', … */
+  async function rotateSheets(value) {
+    if (!value || state.busy || !state.sheets.length) return;
+    const [scope, deg] = value.split(':');
+    const targets = scope === 'all' ? state.sheets.map((s, i) => i) : [state.cur];
+    setBusy(true);
+    status(t('rotating'));
+    try {
+      for (const i of targets) {
+        state.sheets[i].rot = (state.sheets[i].rot + Number(deg)) % 360;
+        await scanSheet(i);
+      }
+      assignAnalysis(Detect.analyze(state.feats, $('layoutSel').value), targets);
+    } finally {
+      setBusy(false);
+    }
+    buildThumbs();
+    showSheet(state.cur);
+    commit();
+  }
+
+  /* ---------- output order ---------- */
+
+  const keyOf = (i, j) => i + ':' + j;
+
+  /* Included pages in reading order, before any rearranging by the user. */
+  function naturalList() {
     const list = [], rtl = $('order').value === 'rtl';
     state.sheets.forEach((sheet, i) => {
       const order = sheet.pages.map((p, j) => j);
       if (rtl && sheet.split === 'h') order.reverse();
-      for (const j of order) if (sheet.pages[j].include) list.push({ i, j });
+      for (const j of order) if (sheet.pages[j].include) list.push({ i, j, key: keyOf(i, j) });
+    });
+    return list;
+  }
+
+  /* Pages of the output document, in order. Entries are { i, j, key } or { blank, key }. */
+  function outputList() {
+    const natural = naturalList();
+    if (!state.order) return natural;
+    const left = new Map(natural.map((o) => [o.key, o]));
+    const list = [];
+    for (const key of state.order) {
+      if (key[0] === 'b') list.push({ blank: true, key });
+      else if (left.has(key)) { list.push(left.get(key)); left.delete(key); }
+    }
+    // Pages that appeared since the order was set go right after the page that precedes them naturally.
+    natural.forEach((o, n) => {
+      if (!left.has(o.key)) return;
+      let at = 0;
+      for (let m = n - 1; m >= 0; m--) {
+        const found = list.findIndex((x) => x.key === natural[m].key);
+        if (found >= 0) { at = found + 1; break; }
+      }
+      list.splice(at, 0, o);
     });
     return list;
   }
@@ -166,6 +245,62 @@
     const pages = outputList().length;
     const check = state.sheets.filter((s) => s.pages.some((p) => p.flag === 'review')).length;
     status(t('summary', { sheets: state.sheets.length, pages }) + (check ? t('toCheck', { n: check }) : ''));
+  }
+
+  /* ---------- undo / redo ---------- */
+
+  const history = [];
+  let historyAt = -1, lastKey = '', lastTime = 0;
+
+  const snapshot = () => JSON.stringify({
+    sheets: state.sheets.map((s) => ({ rot: s.rot, split: s.split, autoSplit: s.autoSplit, pages: s.pages, auto: s.auto })),
+    order: state.order, blankSeq: state.blankSeq,
+  });
+
+  /* Records the current areas as an undo step. Rapid repeats of the same kind
+   * (key), such as holding an arrow key, collapse into one step. */
+  function commit(key = '') {
+    const snap = snapshot(), now = Date.now();
+    if (snap === history[historyAt]) return;
+    if (key && key === lastKey && now - lastTime < 1000 && historyAt > 0) {
+      history[historyAt] = snap;
+    } else {
+      history.length = historyAt + 1;
+      history.push(snap);
+      if (history.length > HISTORY) history.shift();
+      historyAt = history.length - 1;
+    }
+    lastKey = key;
+    lastTime = now;
+    updateHistoryButtons();
+  }
+
+  function updateHistoryButtons() {
+    $('undoBtn').disabled = state.busy || historyAt <= 0;
+    $('redoBtn').disabled = state.busy || historyAt >= history.length - 1;
+  }
+
+  async function travel(step) {
+    const to = historyAt + step;
+    if (state.busy || to < 0 || to >= history.length) return;
+    historyAt = to;
+    lastKey = '';
+    const data = JSON.parse(history[to]);
+    setBusy(true);
+    try {
+      for (let i = 0; i < state.sheets.length; i++) {
+        const sheet = state.sheets[i], saved = data.sheets[i];
+        if (sheet.rot !== saved.rot) { sheet.rot = saved.rot; await scanSheet(i); }
+        Object.assign(sheet, { split: saved.split, autoSplit: saved.autoSplit, pages: saved.pages, auto: saved.auto });
+      }
+      state.order = data.order;
+      state.blankSeq = data.blankSeq;
+    } finally {
+      setBusy(false);
+    }
+    buildThumbs();
+    showSheet(state.cur, true);
+    if ($('organiser').open) renderOrganiser();
   }
 
   /* ---------- thumbnails ---------- */
@@ -210,32 +345,40 @@
 
   /* ---------- editor ---------- */
 
-  let viewToken = 0;
+  let viewToken = 0, viewTimer = 0;
 
-  function showSheet(i) {
+  /* keepActive: stay on the selected page instead of jumping to the first included one. */
+  function showSheet(i, keepActive = false) {
     if (!state.sheets.length) return;
     state.cur = clamp(i, 0, state.sheets.length - 1);
     const sheet = state.sheets[state.cur];
-    state.active = Math.max(0, sheet.pages.findIndex((p) => p.include));
+    if (!keepActive || state.active >= sheet.pages.length) state.active = Math.max(0, sheet.pages.findIndex((p) => p.include));
 
     [...$('thumbs').children].forEach((el, k) => el.classList.toggle('current', k === state.cur));
-    $('thumbs').children[state.cur].scrollIntoView({ block: 'nearest' });
+    $('thumbs').children[state.cur].scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
     // Show the thumbnail at once, then swap in the sharp render.
-    const view = $('view'), token = ++viewToken, index = state.cur;
+    const view = $('view');
     view.width = sheet.thumb.width;
     view.height = sheet.thumb.height;
     view.getContext('2d').drawImage(sheet.thumb, 0, 0);
-    const k = VIEW_PX / Math.max(sheet.wPt, sheet.hPt);
-    renderRegion(index, FULL, Math.round(sheet.wPt * k), Math.round(sheet.hPt * k)).then((canvas) => {
+    renderView();
+
+    fitStage();
+    refreshSheet();
+  }
+
+  /* Sharp render of the current sheet, finer when zoomed in. */
+  function renderView() {
+    const sheet = state.sheets[state.cur], token = ++viewToken;
+    const k = clamp(VIEW_PX * state.zoom, VIEW_PX, VIEW_MAX_PX) / Math.max(sheet.wPt, sheet.hPt);
+    renderRegion(state.cur, FULL, Math.round(sheet.wPt * k), Math.round(sheet.hPt * k)).then((canvas) => {
       if (token !== viewToken) return;
+      const view = $('view');
       view.width = canvas.width;
       view.height = canvas.height;
       view.getContext('2d').drawImage(canvas, 0, 0);
     }, () => {});
-
-    fitStage();
-    refreshSheet();
   }
 
   function fitStage() {
@@ -244,10 +387,30 @@
     const stage = $('stage'), aspect = sheet.wPt / sheet.hPt;
     // In the one-column layout the stage grows with the sheet instead of filling a fixed pane.
     const narrow = matchMedia('(max-width: 760px)').matches;
-    const availW = stage.clientWidth - 40, availH = narrow ? innerHeight * 0.7 : stage.clientHeight - 40;
-    const w = Math.max(50, Math.min(availW, availH * aspect));
+    const availW = stage.offsetWidth - 40, availH = narrow ? innerHeight * 0.7 : stage.offsetHeight - 40;
+    const w = Math.max(50, Math.min(availW, availH * aspect)) * state.zoom;
     $('wrap').style.width = w + 'px';
     $('wrap').style.height = w / aspect + 'px';
+    $('zoomBtn').textContent = Math.round(state.zoom * 100) + '%';
+    $('zoomOutBtn').disabled = state.zoom <= 1;
+    $('zoomInBtn').disabled = state.zoom >= MAX_ZOOM;
+  }
+
+  /* Zooms the sheet, keeping the point under (clientX, clientY) in place when given. */
+  function setZoom(zoom, clientX, clientY) {
+    if (!state.sheets.length) return;
+    const stage = $('stage'), wrap = $('wrap'), before = wrap.getBoundingClientRect();
+    const box = stage.getBoundingClientRect();
+    const px = clientX === undefined ? box.left + box.width / 2 : clientX;
+    const py = clientY === undefined ? box.top + box.height / 2 : clientY;
+    const fx = (px - before.left) / before.width, fy = (py - before.top) / before.height;
+    state.zoom = clamp(zoom, 1, MAX_ZOOM);
+    fitStage();
+    const after = wrap.getBoundingClientRect();
+    stage.scrollLeft += after.left + fx * after.width - px;
+    stage.scrollTop += after.top + fy * after.height - py;
+    clearTimeout(viewTimer);
+    viewTimer = setTimeout(renderView, 250);
   }
 
   /* Redraws everything that depends on the current sheet's areas. */
@@ -294,7 +457,7 @@
       const check = document.createElement('input');
       check.type = 'checkbox';
       check.checked = p.include;
-      check.addEventListener('change', () => { p.include = check.checked; state.active = j; refreshSheet(); });
+      check.addEventListener('change', () => { p.include = check.checked; state.active = j; refreshSheet(); commit(); });
       tag.append(check, p.include ? t('page', { n: number }) : t('skipped'));
       el.append(tag);
 
@@ -340,9 +503,28 @@
       state.active = j;
       if (moved) { page.manual = true; page.flag = null; }
       refreshSheet();
+      commit();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+  }
+
+  /* Arrow keys: moves the selected area by (dx, dy), or resizes it from its right / bottom edge. */
+  function nudge(dx, dy, resize) {
+    const sheet = state.sheets[state.cur], page = sheet && sheet.pages[state.active];
+    if (!page) return;
+    const b = page.box;
+    if (resize) {
+      b.w = clamp(b.w + dx, MIN_BOX, 1 - b.x);
+      b.h = clamp(b.h + dy, MIN_BOX, 1 - b.y);
+    } else {
+      b.x = clamp(b.x + dx, 0, 1 - b.w);
+      b.y = clamp(b.y + dy, 0, 1 - b.h);
+    }
+    page.manual = true;
+    if (page.flag === 'review') page.flag = null;
+    refreshSheet();
+    commit('nudge');
   }
 
   function setSheetLayout(count) {
@@ -365,6 +547,7 @@
     sheet.pages = boxes.map((box) => ({ box, angle, flag: null, include: true, manual: true }));
     state.active = 0;
     refreshSheet();
+    commit();
   }
 
   function resetSheet() {
@@ -373,6 +556,7 @@
     sheet.split = sheet.autoSplit;
     state.active = 0;
     refreshSheet();
+    commit();
   }
 
   /* Hand-set tilt of the selected page. */
@@ -384,6 +568,7 @@
     placeBox($('overlay').children[state.active], page);
     drawThumb(state.cur);
     schedulePreview();
+    commit('angle');
   }
 
   /* Copies the current sheet's areas to other sheets; skipped pages stay skipped.
@@ -413,6 +598,77 @@
       drawThumb(i);
     });
     refreshSheet();
+    commit();
+  }
+
+  /* ---------- page organiser ---------- */
+
+  /* Stores a rearranged output list; back to automatic when it matches the natural order. */
+  function setOrder(list) {
+    const keys = list.map((o) => o.key), natural = naturalList().map((o) => o.key);
+    state.order = keys.length === natural.length && keys.every((k, n) => k === natural[n]) ? null : keys;
+    renderOrganiser();
+    refreshSheet();
+    commit();
+  }
+
+  function renderOrganiser() {
+    const grid = $('orgGrid'), list = outputList();
+    const rtl = document.documentElement.dir === 'rtl';
+    grid.textContent = '';
+    list.forEach((o, n) => {
+      const tile = document.createElement('div');
+      tile.className = 'tile' + (o.blank ? ' blank' : '');
+      tile.draggable = true;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 120;
+      if (o.blank) {
+        canvas.height = 170;
+      } else {
+        const sheet = state.sheets[o.i], b = sheet.pages[o.j].box, th = sheet.thumb;
+        canvas.height = Math.round(120 * (b.h * sheet.hPt) / (b.w * sheet.wPt));
+        canvas.getContext('2d').drawImage(th, b.x * th.width, b.y * th.height, b.w * th.width, b.h * th.height, 0, 0, canvas.width, canvas.height);
+      }
+      const label = document.createElement('span');
+      label.className = 'num';
+      label.textContent = (n + 1) + (o.blank ? ' · ' + t('blank') : '');
+
+      const tools = document.createElement('div');
+      tools.className = 'tools';
+      const button = (text, title, disabled, action) => {
+        const b = document.createElement('button');
+        b.textContent = text;
+        b.title = title;
+        b.disabled = disabled;
+        b.addEventListener('click', action);
+        tools.append(b);
+      };
+      const moveTo = (to) => { const next = list.slice(); next.splice(to, 0, next.splice(n, 1)[0]); setOrder(next); };
+      button(rtl ? '▶' : '◀', t('moveEarlier'), n === 0, () => moveTo(n - 1));
+      button(rtl ? '◀' : '▶', t('moveLater'), n === list.length - 1, () => moveTo(n + 1));
+      button('＋', t('insertBlank'), false, () => {
+        const next = list.slice();
+        next.splice(n + 1, 0, { blank: true, key: 'b' + (++state.blankSeq) });
+        setOrder(next);
+      });
+      button('✕', t('removePage'), false, () => {
+        if (!o.blank) { state.sheets[o.i].pages[o.j].include = false; drawThumb(o.i); }
+        setOrder(list.filter((x) => x !== o));
+      });
+
+      tile.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', String(n)); e.dataTransfer.effectAllowed = 'move'; });
+      tile.addEventListener('dragover', (e) => { e.preventDefault(); tile.classList.add('over'); });
+      tile.addEventListener('dragleave', () => tile.classList.remove('over'));
+      tile.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const from = Number(e.dataTransfer.getData('text/plain'));
+        if (Number.isInteger(from) && from !== n) { const next = list.slice(); next.splice(n, 0, next.splice(from, 1)[0]); setOrder(next); }
+      });
+      tile.append(canvas, label, tools);
+      grid.append(tile);
+    });
   }
 
   /* ---------- output settings ---------- */
@@ -465,8 +721,8 @@
     const m = Math.min(s.margin * MM, Math.min(PW, PH) * 0.45);
     const availW = PW - 2 * m, availH = PH - 2 * m;
     let maxW = 1, maxH = 1;
-    for (const { i, j } of outputList()) {
-      const sheet = state.sheets[i], box = sheet.pages[j].box;
+    for (const o of naturalList()) {
+      const sheet = state.sheets[o.i], box = sheet.pages[o.j].box;
       maxW = Math.max(maxW, box.w * sheet.wPt);
       maxH = Math.max(maxH, box.h * sheet.hPt);
     }
@@ -480,6 +736,21 @@
     const scale = g.scaling === 'each' ? fit : Math.min(fit, g.scaling === 'original' ? 1 : g.common);
     const w = cw * scale, h = ch * scale;
     return { x: (g.PW - w) / 2, y: (g.PH - h) / 2, w, h, scale };
+  }
+
+  /* Page numbers typed as "1-10, 15" -> zero-based indices; all pages when empty; null when not understood. */
+  function parseRange(text, total) {
+    const clean = text.replace(/\s*[-–]\s*/g, '-').trim();
+    if (!clean) return Array.from({ length: total }, (v, n) => n);
+    const out = [];
+    for (const part of clean.split(/[,;\s]+/).filter(Boolean)) {
+      const m = /^(\d+)(?:-(\d+))?$/.exec(part);
+      if (!m) return null;
+      const a = Number(m[1]), b = Math.min(total, m[2] ? Number(m[2]) : a);
+      if (a < 1 || a > total || b < a) return null;
+      for (let n = a; n <= b; n++) out.push(n - 1);
+    }
+    return out;
   }
 
   /* ---------- preview ---------- */
@@ -521,21 +792,22 @@
 
   const toBlob = (canvas, type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
 
-  /* Builds the output document and returns its bytes. */
-  async function buildPdf(s, onProgress) {
+  /* Builds a document from the given output pages (all of them by default) and returns its bytes. */
+  async function buildPdf(s, onProgress, list = outputList()) {
     const { PDFDocument, pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject } = PDFLib;
     const doc = await PDFDocument.create();
     doc.setCreator('EasyScan2PDF');
-    const g = geometry(s), list = outputList(), k = s.dpi / 72;
+    const g = geometry(s), k = s.dpi / 72;
 
     for (let n = 0; n < list.length; n++) {
       if (state.cancel) throw new DOMException('Cancelled', 'AbortError');
+      const out = doc.addPage([g.PW, g.PH]);
+      if (list[n].blank) { onProgress(n + 1, list.length); continue; }
       const sheet = state.sheets[list[n].i], page = sheet.pages[list[n].j];
       const pl = place(sheet, page, g);
       const pxW = Math.max(1, Math.round(pl.w * k)), pxH = Math.max(1, Math.round(pl.h * k));
       const canvas = await renderRegion(list[n].i, page.box, pxW, pxH, angleOf(page));
       const img = applyTone(canvas, s, k * pl.scale);
-      const out = doc.addPage([g.PW, g.PH]);
       const y = g.PH - pl.y - pl.h;   // PDF origin is bottom-left
 
       if (img) {
@@ -562,19 +834,49 @@
     return doc.save();
   }
 
+  function download(bytes, name) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  async function writeTo(handle, bytes) {
+    const writable = await handle.createWritable();
+    await writable.write(bytes);
+    await writable.close();
+  }
+
   async function exportPdf() {
-    if (state.busy || !outputList().length) return;
+    if (state.busy) return;
+    const all = outputList(), picked = parseRange($('range').value, all.length);
+    if (!picked) { status(t('badRange')); return; }
+    const list = picked.map((n) => all[n]);
+    if (!list.length) return;
+
     let name = ($('outName').value.trim() || 'formatted').replace(/[\\/:*?"<>|]/g, '_');
     if (!/\.pdf$/i.test(name)) name += '.pdf';
 
-    // Ask where to save first: the file picker needs the click that started the export.
-    let handle = null;
-    if (window.showSaveFilePicker) {
-      try {
-        handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
-      } catch (err) {
-        if (err.name === 'AbortError') return;
+    // One file, or several of a fixed number of pages.
+    const per = Math.max(0, Math.floor(+$('splitN').value || 0));
+    const parts = [];
+    if (per > 0 && list.length > per) for (let k = 0; k < list.length; k += per) parts.push(list.slice(k, k + per));
+    else parts.push(list);
+    const digits = String(parts.length).length;
+    const names = parts.length === 1 ? [name]
+      : parts.map((p, k) => `${name.replace(/\.pdf$/i, '')}_${String(k + 1).padStart(digits, '0')}.pdf`);
+
+    // Ask where to save first: the pickers need the click that started the export.
+    let file = null, folder = null;
+    try {
+      if (parts.length > 1 && window.showDirectoryPicker) folder = await window.showDirectoryPicker({ mode: 'readwrite' });
+      else if (parts.length === 1 && window.showSaveFilePicker) {
+        file = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] });
       }
+    } catch (err) {
+      if (err.name === 'AbortError') return;
     }
 
     setBusy(true);
@@ -583,23 +885,21 @@
     $('progress').hidden = false;
     $('progress').value = 0;
     try {
-      const bytes = await buildPdf(settings(), (done, total) => {
-        $('progress').value = done / total;
-        status(t('creating', { i: done, n: total }));
-      });
-      if (handle) {
-        const writable = await handle.createWritable();
-        await writable.write(bytes);
-        await writable.close();
-      } else {
-        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = name;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      const s = settings();
+      let done = 0, size = 0;
+      for (let k = 0; k < parts.length; k++) {
+        const bytes = await buildPdf(s, (n) => {
+          $('progress').value = (done + n) / list.length;
+          status(t('creating', { i: done + n, n: list.length }));
+        }, parts[k]);
+        done += parts[k].length;
+        size += bytes.length;
+        if (folder) await writeTo(await folder.getFileHandle(names[k], { create: true }), bytes);
+        else if (file) await writeTo(file, bytes);
+        else download(bytes, names[k]);
       }
-      status(t('saved', { name: handle ? handle.name : name, mb: (bytes.length / 1048576).toFixed(1) }));
+      const mb = (size / 1048576).toFixed(1);
+      status(parts.length === 1 ? t('saved', { name: file ? file.name : name, mb }) : t('savedParts', { n: parts.length, mb }));
     } catch (err) {
       status(err.name === 'AbortError' ? t('cancelled') : t('exportFailed', { msg: err.message }));
     } finally {
@@ -638,13 +938,19 @@
   $('openBtn').addEventListener('click', () => $('fileInput').click());
   $('fileInput').addEventListener('change', (e) => { openFiles(e.target.files); e.target.value = ''; });
 
-  window.addEventListener('dragover', (e) => { e.preventDefault(); $('stage').classList.add('drop'); });
+  // File drops only: dragging tiles inside the page organiser is not a file drop.
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  window.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); $('stage').classList.add('drop'); } });
   window.addEventListener('dragleave', () => $('stage').classList.remove('drop'));
   window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
     e.preventDefault();
     $('stage').classList.remove('drop');
     openFiles(e.dataTransfer.files);
   });
+
+  /* A <select> used as a menu: runs the action, then shows its caption again. */
+  const menu = (id, action) => $(id).addEventListener('change', () => { const value = $(id).value; $(id).value = ''; action(value); });
 
   $('layoutSel').addEventListener('change', () => { if (state.feats.length) applyAnalysis(); });
   $('prevBtn').addEventListener('click', () => showSheet(state.cur - 1));
@@ -652,7 +958,21 @@
   $('oneBtn').addEventListener('click', () => setSheetLayout(1));
   $('twoBtn').addEventListener('click', () => setSheetLayout(2));
   $('resetBtn').addEventListener('click', resetSheet);
-  $('applySel').addEventListener('change', () => { applyAreas($('applySel').value); $('applySel').value = ''; });
+  menu('applySel', applyAreas);
+  menu('rotateSel', rotateSheets);
+  $('undoBtn').addEventListener('click', () => travel(-1));
+  $('redoBtn').addEventListener('click', () => travel(1));
+  $('zoomOutBtn').addEventListener('click', () => setZoom(state.zoom / 1.25));
+  $('zoomInBtn').addEventListener('click', () => setZoom(state.zoom * 1.25));
+  $('zoomBtn').addEventListener('click', () => setZoom(1));
+  $('stage').addEventListener('wheel', (e) => {
+    if (!e.ctrlKey || !state.sheets.length) return;
+    e.preventDefault();
+    setZoom(state.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
+  }, { passive: false });
+  $('organiseBtn').addEventListener('click', () => { if (state.sheets.length) { renderOrganiser(); $('organiser').showModal(); } });
+  $('orgClose').addEventListener('click', () => $('organiser').close());
+  $('orgReset').addEventListener('click', () => setOrder(naturalList()));
   $('exportBtn').addEventListener('click', exportPdf);
   $('cancelBtn').addEventListener('click', () => { state.cancel = true; });
   $('outName').addEventListener('input', () => { state.nameEdited = true; });
@@ -661,19 +981,67 @@
   $('angle').addEventListener('input', setAngle);
 
   window.addEventListener('keydown', (e) => {
-    if (!state.sheets.length || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
-    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { showSheet(state.cur - 1); e.preventDefault(); }
-    if (e.key === 'ArrowRight' || e.key === 'PageDown') { showSheet(state.cur + 1); e.preventDefault(); }
+    if (!state.sheets.length || $('organiser').open || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    const mod = e.ctrlKey || e.metaKey;
+    const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    if (mod && e.key.toLowerCase() === 'z') travel(e.shiftKey ? 1 : -1);
+    else if (mod && e.key.toLowerCase() === 'y') travel(1);
+    else if (e.key === 'PageUp') showSheet(state.cur - 1);
+    else if (e.key === 'PageDown') showSheet(state.cur + 1);
+    else if (arrows[e.key]) {
+      // 0.1% of the sheet per press, 1% with Shift; Alt resizes instead of moving.
+      const step = e.shiftKey ? 0.01 : 0.001;
+      nudge(arrows[e.key][0] * step, arrows[e.key][1] * step, e.altKey);
+    }
+    else if (!mod && (e.key === '+' || e.key === '=')) setZoom(state.zoom * 1.25);
+    else if (!mod && e.key === '-') setZoom(state.zoom / 1.25);
+    else if (!mod && e.key === '0') setZoom(1);
+    else return;
+    e.preventDefault();
   });
 
   new ResizeObserver(fitStage).observe($('stage'));
 
-  /* ---------- installable app ---------- */
+  /* ---------- installable app and updates ---------- */
+
+  $('version').textContent = `v${APP_VERSION.number} · ${APP_VERSION.date}`;
 
   // The service worker only caches the app's own files so it also works offline.
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
   }
+
+  /* Fetches the newest app files and reloads. Without a service worker (page opened
+   * straight from disk) a reload is all there is to do. */
+  async function forceUpdate() {
+    if (state.sheets.length && !confirm(t('updateConfirm'))) return;
+    status(t('updating'));
+    $('updateBtn').disabled = true;
+    try {
+      const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+      if (reg) {
+        await reg.update().catch(() => {});
+        const pending = reg.installing || reg.waiting;
+        if (pending) {
+          await new Promise((resolve) => {
+            const timer = setTimeout(resolve, 10000);
+            pending.addEventListener('statechange', () => {
+              if (pending.state === 'activated' || pending.state === 'redundant') { clearTimeout(timer); resolve(); }
+            });
+          });
+        }
+        if (reg.active) {
+          await new Promise((resolve) => {
+            const channel = new MessageChannel(), timer = setTimeout(resolve, 20000);
+            channel.port1.onmessage = () => { clearTimeout(timer); resolve(); };
+            reg.active.postMessage({ type: 'refresh' }, [channel.port2]);
+          });
+        }
+      }
+    } catch (e) { /* reload anyway */ }
+    location.reload();
+  }
+  $('updateBtn').addEventListener('click', forceUpdate);
 
   let installEvent = null;
   window.addEventListener('beforeinstallprompt', (e) => {
@@ -707,6 +1075,10 @@
     I18n.set(code);
     $('lang').value = I18n.lang;
     for (const option of $('dpi').options) option.textContent = t('dpi', { n: option.value });
+    // "Previous" points towards the start of the line, which is the right in right-to-left languages.
+    const rtl = document.documentElement.dir === 'rtl';
+    $('prevBtn').textContent = rtl ? '▶' : '◀';
+    $('nextBtn').textContent = rtl ? '◀' : '▶';
     updateSettingsUI();
     if (state.sheets.length) {
       state.sheets.forEach((sheet, i) => drawThumb(i));
@@ -732,7 +1104,8 @@
   restoreSettings();
   setTheme(['light', 'dark'].includes(ui.theme) ? ui.theme : 'auto');
   setLanguage(ui.lang || I18n.preferred());
+  updateHistoryButtons();
 
   // Entry points for scripted use and tests.
-  window.EasyScan2PDF = { state, loadBytes, buildPdf, settings };
+  window.EasyScan2PDF = { state, loadBytes, buildPdf, settings, outputList };
 })();
