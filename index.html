@@ -16,6 +16,8 @@
 <body>
 <header>
   <h1>EasyScan2PDF</h1>
+  <span id="version"></span>
+  <button id="updateBtn" data-i18n="update" data-i18n-title="updateTitle">Update</button>
   <button id="openBtn" class="primary" data-i18n="open">Open…</button>
   <input id="fileInput" type="file" accept="application/pdf,.pdf,image/jpeg,image/png" multiple hidden>
   <span id="docName"></span>
@@ -64,12 +66,30 @@
         <option value="left" data-i18n="applyLeft">Left pages of all sheets</option>
         <option value="right" data-i18n="applyRight">Right pages of all sheets</option>
       </select>
+      <select id="rotateSel" data-i18n-title="rotateTitle">
+        <option value="" data-i18n="rotate">Rotate…</option>
+        <option value="this:90" data-i18n="rotThisR">This sheet 90° right</option>
+        <option value="this:270" data-i18n="rotThisL">This sheet 90° left</option>
+        <option value="this:180" data-i18n="rotThis180">This sheet 180°</option>
+        <option value="all:90" data-i18n="rotAllR">All sheets 90° right</option>
+        <option value="all:270" data-i18n="rotAllL">All sheets 90° left</option>
+        <option value="all:180" data-i18n="rotAll180">All sheets 180°</option>
+      </select>
       <label class="inline" data-i18n-title="tiltTitle"><span data-i18n="tilt">Tilt</span>
         <input id="angle" type="number" min="-15" max="15" step="0.1" value="0.0">°
       </label>
+      <span class="seg">
+        <button id="undoBtn" data-i18n-title="undoTitle" disabled>↶</button>
+        <button id="redoBtn" data-i18n-title="redoTitle" disabled>↷</button>
+      </span>
+      <span class="seg">
+        <button id="zoomOutBtn" data-i18n-title="zoomOutTitle">−</button>
+        <button id="zoomBtn" data-i18n-title="zoomFitTitle">100%</button>
+        <button id="zoomInBtn" data-i18n-title="zoomInTitle">+</button>
+      </span>
       <span id="flagNote"></span>
     </div>
-    <div id="stage">
+    <div id="stage" dir="ltr">
       <div id="empty">
         <p><strong data-i18n="dropHere">Drop a scanned PDF here</strong><span data-i18n="dropOr"> or use “Open…”.</span></p>
         <p data-i18n="emptyImages">JPEG and PNG scans work too: select all the images at once.</p>
@@ -135,6 +155,11 @@
     </div>
     <label class="check"><input id="deskew" type="checkbox" checked> <span data-i18n="deskew">Straighten tilted pages</span></label>
     <label class="check"><input id="clean" type="checkbox" checked> <span data-i18n="clean">Clean up the scan (white paper, no specks)</span></label>
+    <div class="row">
+      <label><span data-i18n="pageRange">Pages to export</span><input id="range" type="text" inputmode="numeric" spellcheck="false" data-i18n-placeholder="rangePlaceholder"></label>
+      <label><span data-i18n="splitEvery">Pages per file</span><input id="splitN" type="number" min="0" data-i18n-placeholder="splitPlaceholder"></label>
+    </div>
+    <button id="organiseBtn" class="wide" data-i18n="organise">Organise pages…</button>
     <label><span data-i18n="fileName">File name</span><input id="outName" type="text" spellcheck="false"></label>
     <div class="row">
       <button id="exportBtn" class="primary" disabled data-i18n="create">Create PDF</button>
@@ -148,8 +173,19 @@
   </aside>
 </main>
 
+<dialog id="organiser">
+  <div class="dialogHead">
+    <h2 data-i18n="organiseTitle">Output pages</h2>
+    <button id="orgReset" data-i18n="orgReset">Original order</button>
+    <button id="orgClose" class="primary" data-i18n="close">Close</button>
+  </div>
+  <p class="hint" data-i18n="orgHint">Drag a page to move it, or use the buttons under it.</p>
+  <div id="orgGrid"></div>
+</dialog>
+
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
+<script src="src/version.js"></script>
 <script src="src/i18n.js"></script>
 <script src="src/detect.js"></script>
 <script src="src/clean.js"></script>

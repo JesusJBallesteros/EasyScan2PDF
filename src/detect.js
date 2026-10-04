@@ -268,6 +268,38 @@
     return { box: { x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0 }, flag };
   }
 
+  /* Detects a sheet scanned sideways. Returns the clockwise rotation that puts it
+   * upright (90 or 270), or 0 when the text already runs horizontally.
+   * Lines of text make the ink profile across them jagged and the profile along
+   * them smooth. Which way is up is judged from Latin letter shapes: more
+   * strokes rise above a line of text (b d f h k l t, capitals) than hang below it. */
+  function sideways(f) {
+    const mask = unpack(f.bits, f.W * f.H);
+    const cols = colCounts(mask, f.W, 0, f.W, 0, f.H), rows = rowCounts(mask, f.W, 0, f.W, 0, f.H);
+    const jagged = (p) => {
+      let diff = 0, sum = 0;
+      for (let i = 0; i < p.length; i++) {
+        sum += p[i] * p[i];
+        if (i) diff += (p[i] - p[i - 1]) * (p[i] - p[i - 1]);
+      }
+      return sum ? diff / sum : 0;
+    };
+    if (jagged(cols) <= jagged(rows) * 2) return 0;
+
+    let peak = 0;
+    for (let x = 0; x < f.W; x++) if (cols[x] > peak) peak = cols[x];
+    let left = 0, right = 0;
+    // Each run is the body of a line of text (the height of a lowercase x).
+    for (const [a, b] of runs(0, f.W, (x) => cols[x] >= peak * 0.35)) {
+      if (b - a < 3) continue;
+      const m = Math.max(2, Math.round((b - a) * 0.6));
+      for (let x = Math.max(0, a - m); x < a; x++) left += cols[x];
+      for (let x = b; x < Math.min(f.W, b + m); x++) right += cols[x];
+    }
+    // Ascenders pointing right mean the page was turned clockwise: turn it back.
+    return right > left ? 270 : 90;
+  }
+
   /* Pass 2. mode: 'auto' | '1' | '2' (left | right) | '2v' (top | bottom).
    * Top | bottom sheets are analysed transposed, so the same code handles both splits. */
   function analyze(feats, mode) {
@@ -327,5 +359,5 @@
     });
   }
 
-  global.Detect = { extract, analyze, otsu };
+  global.Detect = { extract, analyze, sideways, otsu };
 })(window);
