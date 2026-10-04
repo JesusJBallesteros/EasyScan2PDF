@@ -39,11 +39,12 @@ Once installed on a computer you can also right-click a PDF and choose
 | 2 | **Pages per sheet** | How each scanned sheet is divided. *Auto* decides between one page and two pages side by side. Choose *2 (top \| bottom)* for sheets with one page above the other. Changing this re-runs the detection for the whole document. |
 | 3 | **Reading order** | *Right to left* puts the right-hand page first, for Arabic, Hebrew or Japanese books. |
 | 4 | **Status** | Number of sheets found, number of pages that will be written, and how many sheets need a look. |
-| 5 | **Sheets** | Every scanned sheet with its detected areas. Click one to edit it. A dot marks a sheet: **orange** = check it, **grey** = has a blank page, **blue** = adjusted by hand. |
-| 6 | **Sheet toolbar** | Tools for the sheet being edited — see section 3. |
-| 7 | **Page areas** | One rectangle per output page. What is inside the rectangle is what goes on the page. |
-| 8 | **Output** | Format of the PDF to create — see section 4. |
-| 9 | **Preview** | The selected page exactly as it will be written. |
+| 5 | **Language and theme** | Interface language (English, Español) and light or dark appearance. *Theme: system* follows your device. Both choices are remembered. |
+| 6 | **Sheets** | Every scanned sheet with its detected areas. Click one to edit it. A dot marks a sheet: **orange** = check it, **grey** = has a blank page, **blue** = adjusted by hand. |
+| 7 | **Sheet toolbar** | Tools for the sheet being edited — see section 3. |
+| 8 | **Page areas** | One rectangle per output page. What is inside the rectangle is what goes on the page. |
+| 9 | **Output** | Format of the PDF to create — see section 4. |
+| 10 | **Preview** | The selected page exactly as it will be written. |
 
 ## 2. Open a document
 
@@ -68,7 +69,7 @@ For most documents there is nothing more to do: go to section 4.
 | 1 | **◀ ▶** | Previous and next sheet. The keyboard arrows **←** **→** do the same. |
 | 2 | **1 page / 2 pages** | Changes how *this* sheet is divided — for example a cover scanned alone in a book of double pages. |
 | 3 | **Reset sheet** | Discards your changes on this sheet and restores the automatic areas. |
-| 4 | **Apply to all sheets** | Copies the areas of this sheet to every other sheet. Useful when you prefer to set the frame once by hand. Pages that were skipped stay skipped. |
+| 4 | **Apply areas to…** | Copies the areas of this sheet to other sheets, when you prefer to set the frame once by hand. *All sheets* copies everything. *This sheet onwards* leaves earlier sheets alone, for books whose layout changes partway through. *Left pages of all sheets* and *Right pages of all sheets* copy only that side (the top or bottom page on sheets split top \| bottom). Pages that were skipped stay skipped. |
 | 5 | **Tilt** | Angle of the selected page, in degrees clockwise. It is measured automatically; type a value to correct it. The rectangle turns to match, and the page comes out straight. |
 | 6 | **Notice** | Tells you why a sheet is marked: text was found outside the common frame, or a blank page was skipped. |
 | 7 | **Page label** | The page number in the output. Untick the box to leave this page out; the label then reads *Skipped*. |
@@ -92,9 +93,10 @@ that page.
 | 6 | **Resolution** | Dots per inch of the output. 300 dpi is a good default; going above the resolution of the original scan adds size but no detail. |
 | 7 | **Threshold** | Black & white only. Leave *Automatic threshold* ticked, or untick it and move the slider: right makes the text heavier, left makes it lighter. Greyscale and colour show a **JPEG quality** slider here instead. |
 | 8 | **Straighten tilted pages** | Turns each page by its tilt so the lines come out level. Untick to keep pages as scanned. |
-| 9 | **File name** | Name of the PDF to create. |
-| 10 | **Create PDF** | Writes the document. Chrome, Edge and Brave ask where to save it; other browsers put it in the Downloads folder. **Cancel** stops a long export. |
-| 11 | **Preview** | Updates as you change the settings. |
+| 9 | **Clean up the scan** | Makes the paper pure white, evens out yellowing and the shadow near the binding, darkens the ink and removes isolated specks. Small marks next to text — accents, dots, punctuation — are kept. Untick it for pages with photographs or pale pencil notes you want exactly as scanned. |
+| 10 | **File name** | Name of the PDF to create. |
+| 11 | **Create PDF** | Writes the document. Chrome, Edge and Brave ask where to save it; other browsers put it in the Downloads folder. **Cancel** stops a long export. |
+| 12 | **Preview** | Updates as you change the settings. |
 
 Your output settings are remembered for next time.
 
@@ -109,9 +111,11 @@ Handles are larger so the areas can be adjusted with a finger.
 ## Tips and limits
 
 - **Text cut off on a few pages?** Open those sheets and widen their areas, or
-  set one sheet by hand and use *Apply to all sheets*.
+  set one sheet by hand and use *Apply areas to… → All sheets*.
 - **Wrong split on every sheet?** Pick *Pages per sheet* by hand instead of
   *Auto*.
+- **Faint marks disappeared, or a picture looks washed out?** Untick *Clean up
+  the scan*.
 - Password-protected PDFs cannot be opened.
 - The output contains images of the pages; it does not add searchable text (no OCR).
 
@@ -126,6 +130,8 @@ index.html             the app
 manifest.webmanifest   install information
 sw.js                  offline cache (app files only)
 src/detect.js          page-area and tilt detection (no DOM)
+src/clean.js           colour modes and scan clean-up (no DOM)
+src/i18n.js            interface languages
 src/app.js             UI, preview and PDF export
 src/style.css
 icons/
@@ -137,6 +143,10 @@ scans/, formatted/     personal documents — git-ignored
 **Publish:** push the repository to GitHub, then *Settings → Pages → Deploy from
 a branch → `main` / root*. After changing app files,
 bump `CACHE` in `sw.js` so installed copies drop their old cache.
+
+**Add a language:** in `src/i18n.js`, copy the `en` block under a new language
+code, translate the values and add the language's name to `NAMES`. It then
+appears in the language menu; keys you leave out fall back to English.
 
 **Run locally:** double-click `index.html`, or, to test installation and offline
 use, serve the folder:

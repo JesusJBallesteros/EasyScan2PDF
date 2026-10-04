@@ -9,9 +9,25 @@
   --accent-text: #ffffff;
   --warn: #c2410c;
   --skip: #8b93a1;
+  color-scheme: light;
+}
+/* Dark palette: by system preference unless the user chose light, or when chosen explicitly. */
+:root[data-theme="dark"] {
+  --bg: #16191e;
+  --panel: #1f242b;
+  --stage: #0f1114;
+  --text: #e3e7ec;
+  --muted: #98a2b0;
+  --line: #343b45;
+  --accent: #4c8dff;
+  --accent-text: #0b0e12;
+  --warn: #fb923c;
+  --skip: #6b7482;
+  color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #16191e;
     --panel: #1f242b;
     --stage: #0f1114;
@@ -178,6 +194,8 @@ progress { width: 100%; margin: 4px 0 10px; }
 #previewInfo { color: var(--muted); margin: 6px 0 0; }
 
 #angle { width: 64px; }
+#applySel { max-width: 190px; }
+#lang, #theme { color: var(--muted); }
 #angle:disabled { opacity: .5; }
 
 /* Fingers need bigger targets than a mouse pointer. */
